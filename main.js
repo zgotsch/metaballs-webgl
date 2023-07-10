@@ -1,22 +1,23 @@
-document.getElementById("app").innerHTML = `
-<h1>Hello Vanilla!</h1>
-<div>
-  We use the same configuration as Parcel to bundle this sandbox, you can find more
-  info about Parcel
-  <a href="https://parceljs.org" target="_blank" rel="noopener noreferrer">here</a>.
-</div>
-`;
-
 const fragmentShaderSource = `
 precision mediump float;
 
-const int MAX_MARCHING_STEPS = 64;
+const int MAX_MARCHING_STEPS = 256;
 const float MIN_DIST = 0.0;
-const float MAX_DIST = 100.0;
+const float MAX_DIST = 15.0;
 const float EPSILON = 0.001;
 
 uniform float iTime; // We use a uniform for time input
 uniform vec2 iResolution; // And another uniform for resolution input
+
+float lerp(float a, float b, float t) {
+  return a + t * (b - a);
+}
+float ilerp(float a, float b, float v) {
+  return (v - a) / (b - a);
+}
+float remap(float v, float a0, float a1, float b0, float b1) {
+  return lerp(b0, b1, ilerp(a0, a1, v));
+}
 
 mat3 rotateY(float theta) {
   float c = cos(theta);
@@ -41,16 +42,17 @@ float sceneSDF(vec3 samplePoint) {
   float ballRadius = 1.0;
   float t = iTime / 3.0 + 10500.0;
   float balls = MAX_DIST;
-  for (float i = 1.0; i < 4.0; i += 1.3) {
-    for (float j = 1.0; j < 4.0; j += 1.3) {
-      float cost = cos(t * j);
-      balls = smin(balls, sphereSDF(samplePoint + vec3(sin(t * i) * j, cost * i, cost * j), ballRadius), 0.7);
-    }
-  }
 
-  return balls;
+  return smin(
+    sphereSDF(samplePoint + cos(t + 1.0) * 0.4, 2.0),
+    smin(
+      sphereSDF(samplePoint + vec3(-2.0, 0.2, 1.4) + cos(1.2 * t) * 0.2, 1.8),
+      sphereSDF(samplePoint + vec3(-2.5, 1.5, 2.0) + cos(1.7 * t + 2.0) * 0.3, 1.5),
+      0.7),
+    0.7);
 }
 
+// raymarching
 float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, float end) {
   float depth = start;
   for (int i = 0; i < MAX_MARCHING_STEPS; i++) {
@@ -66,10 +68,11 @@ float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, f
   return end;
 }
 
+// compute the raycast ray
 vec3 rayDirection(float fieldOfView, vec2 size, vec2 fragCoord) {
-  vec2 xy = fragCoord - size / 2.0;
-  float z = size.y / tan(radians(fieldOfView) / 2.0);
-  return normalize(vec3(xy, -z));
+  vec2 scaled = fragCoord / size;
+  scaled -= 0.5;
+  return normalize(vec3(scaled.x, scaled.y * size.y / size.x, -1.0 / tan(radians(fieldOfView) / 2.0)));
 }
 
 vec3 estimateNormal(vec3 p) {
@@ -88,12 +91,21 @@ mat3 viewMatrix(vec3 eye, vec3 center, vec3 up) {
   return mat3(s, u, -f);
 }
 
-void main() {
-  vec3 light0Pos = vec3(10.0, -2.0, -2.0);
-  vec3 light0Color = vec3(1.0, 0.895, 0.733);
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
 
-  vec3 light1Pos = vec3(-10.0, 1.0, -2.0);
-  vec3 light1Color = vec3(0.718, 0.92, 0.953);
+float PI = 3.14159;
+float gamma = 2.2;
+
+void main() {
+  vec3 color;
+
+  vec3 light0Pos = vec3(100.0, -50.0, 2.0);
+  vec3 light0Color = vec3(0.25, 0.05, 0.05);
+
+  vec3 light1Pos = vec3(-100.0, 50.0, 0.0);
+  vec3 light1Color = vec3(0.05, 0.2, 0.05);
 
   vec3 light2Pos = vec3(-0.5, 0.0, 10.0);
   vec3 light2Color = vec3(0.464, 0.632, 0.872);
@@ -101,36 +113,36 @@ void main() {
   vec3 viewDir = rayDirection(90.0, iResolution.xy, gl_FragCoord.xy);
   vec3 eye = /* rotateY(iTime / 3.0) * */ vec3(0.0, 0.0, 10.0);
   mat3 viewToWorld = viewMatrix(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
-  vec3 worldDir = viewToWorld * viewDir;
+  vec3 worldDir = normalize(viewToWorld * viewDir);
   float dist = shortestDistanceToSurface(eye, worldDir, MIN_DIST, MAX_DIST);
 
-  if (dist > MAX_DIST - EPSILON) {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+  // gl_FragColor = vec4(vec3(remap(dist, MIN_DIST, MAX_DIST, 0.0, 1.0)), 1.0);
+  // return;
+
+  if (dist > (MAX_DIST - EPSILON)) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
     return;
   }
 
   vec3 p = eye + dist * worldDir;
   vec3 normal = estimateNormal(p);
 
-  vec3 ambient = vec3(0.3);
+  vec3 ambient = pow(vec3(0.573, 0.845, 1.0), vec3(gamma));
+  // vec3 ambient = vec3(0.773, 0.945, 1.0);
 
   vec3 lightDir0 = normalize(light0Pos - p);
   vec3 lightDir1 = normalize(light1Pos - p);
   vec3 lightDir2 = normalize(light2Pos - p);
 
-  float diffuse0 = max(dot(lightDir0, normal) * (40.0/pow(length(light0Pos-p), 2.0)), 0.0);
-  float diffuse1 = max(dot(lightDir1, normal) * (40.0/pow(length(light1Pos-p), 2.0)), 0.0);
-  float diffuse2 = max(dot(lightDir2, normal) * (40.0/pow(length(light2Pos-p), 2.0)), 0.0);
+  float diffuse0 = max(dot(lightDir0, normal), 0.0);
+  float diffuse1 = max(dot(lightDir1, normal), 0.0);
+  float diffuse2 = max(dot(lightDir2, normal), 0.0);
 
-  vec3 diffuse = diffuse0 * light0Color + diffuse1 * light1Color + diffuse2 * light2Color;
+  vec3 edgeHighlight3 = fresnelSchlick(max(abs(dot(normal, worldDir)), 0.0), vec3(0.04)) / (1.5 * PI);
 
-  // vec3 diffuse = BlinnPhong(light0Color, lightDir0, normal, -p, vec3(0.5, 0.5, 0.5), 0.9, vec3(0.04)) + BlinnPhong(light1Color, lightDir1, normal, -p, vec3(0.5, 0.5, 0.5), 0.9, vec3(0.04));
+  color = ambient * (edgeHighlight3 + vec3(1.0)) + diffuse0 * light0Color + diffuse1 * light1Color;
 
-  // vec4 tex = texture(iChannel0, reflect(worldDir, normal), 0.0);
-
-  vec3 color = ambient + diffuse;
-
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(pow(color, vec3(1.0/gamma)), 1.0);
 }
 `;
 
@@ -193,7 +205,7 @@ window.onload = function () {
   }
 
   // Set clear color to black, fully opaque
-  gl.clearColor(0.0, 0.0, 0.0, 1.0);
+  gl.clearColor(0.0, 0.0, 0.0, 0.0);
   // Clear the color buffer with specified clear color
   gl.clear(gl.COLOR_BUFFER_BIT);
 
